@@ -1,7 +1,7 @@
 """
 Job Hunter Scraper — Charan Somalaraju
-Scrapes LinkedIn, Indeed, Handshake and scores each job against resume using Claude API.
-Saves results to data/jobs.json for the dashboard.
+Hits public ATS APIs (Greenhouse, Lever, Workday) for Fortune 500 tech companies
++ LinkedIn public search. Scores each job against resume using Claude AI.
 """
 
 import json
@@ -17,7 +17,7 @@ import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
-# ── Resume profile ────────────────────────────────────────────────────────────
+# ── Resume profile ─────────────────────────────────────────────────────────────
 RESUME = """
 Name: Charan Somalaraju
 Education: Masters in Artificial Intelligence, University at Buffalo (2024–present)
@@ -37,23 +37,157 @@ Experience:
 Target roles: ML Engineer, AI Engineer, LLM Engineer, Data Scientist, MLOps Engineer, AI Research Engineer
 """
 
-SEARCH_QUERIES = [
-    "ML Engineer",
-    "AI Engineer",
+# Keywords to filter relevant jobs before scoring (saves API cost)
+RELEVANT_KEYWORDS = [
+    "machine learning", "ml engineer", "ai engineer", "data scientist",
+    "llm", "nlp", "deep learning", "artificial intelligence", "mlops",
+    "research engineer", "applied scientist", "computer vision",
+    "generative ai", "large language", "foundation model", "pytorch",
+    "tensorflow", "python", "data engineer", "analytics engineer",
+]
+
+# ── Fortune 500 companies by ATS platform ─────────────────────────────────────
+# Greenhouse: use public API  https://boards-api.greenhouse.io/v1/boards/{slug}/jobs
+# Lever:      use public API  https://api.lever.co/v0/postings/{slug}?mode=json
+# Workday:    scrape careers page (no public API, use requests)
+
+GREENHOUSE_COMPANIES = [
+    # Big Tech & AI
+    ("anthropic", "Anthropic"),
+    ("openai", "OpenAI"),
+    ("scale-ai", "Scale AI"),
+    ("cohere", "Cohere"),
+    ("huggingface", "Hugging Face"),
+    ("mistral-ai", "Mistral AI"),
+    ("perplexityai", "Perplexity AI"),
+    ("together-ai", "Together AI"),
+    ("modal-labs", "Modal Labs"),
+    ("weights-biases", "Weights & Biases"),
+    ("databricks", "Databricks"),
+    ("snowflake", "Snowflake"),
+    ("confluent", "Confluent"),
+    ("dbt-labs", "dbt Labs"),
+    ("fivetran", "Fivetran"),
+    ("airbyte", "Airbyte"),
+    # Fortune 500 Tech
+    ("robinhood", "Robinhood"),
+    ("coinbase", "Coinbase"),
+    ("stripe", "Stripe"),
+    ("plaid", "Plaid"),
+    ("brex", "Brex"),
+    ("figma", "Figma"),
+    ("notion", "Notion"),
+    ("airtable", "Airtable"),
+    ("dropbox", "Dropbox"),
+    ("twilio", "Twilio"),
+    ("zendesk", "Zendesk"),
+    ("hubspot", "HubSpot"),
+    ("mongodb", "MongoDB"),
+    ("elastic", "Elastic"),
+    ("hashicorp", "HashiCorp"),
+    ("datadog", "Datadog"),
+    ("pagerduty", "PagerDuty"),
+    ("cloudflare", "Cloudflare"),
+    ("fastly", "Fastly"),
+    ("docusign", "DocuSign"),
+    ("okta", "Okta"),
+    ("crowdstrike", "CrowdStrike"),
+    ("sentinelone", "SentinelOne"),
+    ("veeva", "Veeva Systems"),
+    ("servicenow", "ServiceNow"),
+    ("workday", "Workday"),
+    ("splunk", "Splunk"),
+    ("tableau", "Tableau"),
+    ("alteryx", "Alteryx"),
+    ("palantir", "Palantir"),
+    ("c3ai", "C3.ai"),
+    ("squarespace", "Squarespace"),
+    ("eventbrite", "Eventbrite"),
+    ("duolingo", "Duolingo"),
+    ("reddit", "Reddit"),
+    ("discord", "Discord"),
+    ("roblox", "Roblox"),
+    ("unity", "Unity"),
+    ("epic-games", "Epic Games"),
+    ("lyft", "Lyft"),
+    ("doordash", "DoorDash"),
+    ("instacart", "Instacart"),
+    ("chime", "Chime"),
+    ("affirm", "Affirm"),
+    ("klarna", "Klarna"),
+    ("marqeta", "Marqeta"),
+    ("carta", "Carta"),
+    ("lattice", "Lattice"),
+    ("rippling", "Rippling"),
+    ("gusto", "Gusto"),
+    ("greenhouse", "Greenhouse"),
+    ("lever", "Lever"),
+    ("mixpanel", "Mixpanel"),
+    ("amplitude", "Amplitude"),
+    ("segment", "Segment"),
+    ("heap", "Heap"),
+    ("contentful", "Contentful"),
+    ("sanity", "Sanity"),
+    ("vercel", "Vercel"),
+    ("netlify", "Netlify"),
+    ("render", "Render"),
+    ("railway", "Railway"),
+    ("supabase", "Supabase"),
+    ("planetscale", "PlanetScale"),
+    ("neon", "Neon"),
+]
+
+LEVER_COMPANIES = [
+    ("netflix", "Netflix"),
+    ("twitter", "Twitter / X"),
+    ("airbnb", "Airbnb"),
+    ("pinterest", "Pinterest"),
+    ("snap", "Snap"),
+    ("shopify", "Shopify"),
+    ("square", "Square"),
+    ("box", "Box"),
+    ("zoom", "Zoom"),
+    ("slack", "Slack"),
+    ("asana", "Asana"),
+    ("monday", "Monday.com"),
+    ("linear", "Linear"),
+    ("retool", "Retool"),
+    ("census", "Census"),
+    ("hightouch", "Hightouch"),
+    ("anomalo", "Anomalo"),
+    ("covariant", "Covariant"),
+    ("shield-ai", "Shield AI"),
+    ("applied-intuition", "Applied Intuition"),
+    ("nuro", "Nuro"),
+    ("gatik", "Gatik"),
+    ("aurora", "Aurora"),
+    ("wayve", "Wayve"),
+    ("luminar", "Luminar"),
+    ("recursion", "Recursion Pharmaceuticals"),
+    ("insitro", "Insitro"),
+    ("ginkgo", "Ginkgo Bioworks"),
+]
+
+# LinkedIn public search (no auth, just public listings)
+LINKEDIN_QUERIES = [
+    "ML Engineer entry level",
+    "AI Engineer new grad",
+    "Data Scientist machine learning",
     "LLM Engineer",
-    "Machine Learning Engineer",
-    "Data Scientist AI",
     "MLOps Engineer",
-    "AI Research Engineer",
 ]
 
 DATA_FILE = Path(__file__).parent.parent / "data" / "jobs.json"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
-def job_id(title: str, company: str, url: str) -> str:
-    """Stable dedup key."""
-    return hashlib.md5(f"{title.lower()}{company.lower()}{url}".encode()).hexdigest()[:12]
+def job_id(title: str, company: str, url: str = "") -> str:
+    return hashlib.md5(f"{title.lower().strip()}{company.lower().strip()}{url}".encode()).hexdigest()[:12]
+
+
+def is_relevant(title: str, description: str = "") -> bool:
+    text = (title + " " + description).lower()
+    return any(kw in text for kw in RELEVANT_KEYWORDS)
 
 
 def load_existing() -> dict:
@@ -70,74 +204,93 @@ def save(data: dict):
 
 
 def score_job(client: anthropic.Anthropic, title: str, company: str, description: str) -> dict:
-    """Ask Claude to score this job against the resume."""
-    prompt = f"""You are a job matching assistant. Score this job posting against the candidate's resume.
+    prompt = f"""You are a job matching assistant. Score this job against the candidate resume.
 
 RESUME:
 {RESUME}
 
-JOB POSTING:
+JOB:
 Title: {title}
 Company: {company}
-Description: {description[:3000]}
+Description: {description[:2500]}
 
-Respond ONLY with a JSON object (no markdown, no extra text):
+Respond ONLY with JSON (no markdown):
 {{
-  "score": <integer 0-100>,
-  "match_reasons": [<up to 3 short strings explaining why it matches>],
-  "gaps": [<up to 2 short strings of missing skills>],
+  "score": <0-100>,
+  "match_reasons": [<up to 3 short strings>],
+  "gaps": [<up to 2 short strings>],
   "seniority": "<entry|mid|senior|staff>",
   "remote": <true|false|null>
 }}"""
-
     try:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=400,
             messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.content[0].text.strip()
-        # Strip markdown fences if present
-        raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()
+        raw = re.sub(r"^```json\s*|```$", "", response.content[0].text.strip(), flags=re.MULTILINE).strip()
         return json.loads(raw)
     except Exception as e:
         print(f"  ⚠ Scoring failed: {e}")
         return {"score": 50, "match_reasons": [], "gaps": [], "seniority": "unknown", "remote": None}
 
 
-# ── Indeed scraper (requests + BS4) ───────────────────────────────────────────
+# ── ATS scrapers ───────────────────────────────────────────────────────────────
 
-def scrape_indeed(query: str, location: str = "United States") -> list:
+def scrape_greenhouse(slug: str, company_name: str) -> list:
+    """Greenhouse public API — no auth needed."""
     jobs = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
-    }
-    url = f"https://www.indeed.com/jobs?q={requests.utils.quote(query)}&l={requests.utils.quote(location)}&sort=date"
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        cards = soup.select("div.job_seen_beacon")[:10]
-        for card in cards:
-            title_el = card.select_one("h2.jobTitle span")
-            company_el = card.select_one("span[data-testid='company-name']")
-            link_el = card.select_one("h2.jobTitle a")
-            desc_el = card.select_one("div.underShelfFooter")
-            if not title_el or not company_el:
+        url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            return []
+        data = resp.json().get("jobs", [])
+        for j in data:
+            title = j.get("title", "")
+            if not is_relevant(title):
                 continue
             jobs.append({
-                "title": title_el.get_text(strip=True),
-                "company": company_el.get_text(strip=True),
-                "url": "https://www.indeed.com" + (link_el["href"] if link_el else ""),
-                "description": desc_el.get_text(strip=True) if desc_el else "",
-                "source": "Indeed",
-                "query": query,
+                "title": title,
+                "company": company_name,
+                "url": j.get("absolute_url", ""),
+                "description": BeautifulSoup(j.get("content", ""), "html.parser").get_text()[:2000],
+                "source": "Greenhouse",
             })
     except Exception as e:
-        print(f"  Indeed error: {e}")
+        print(f"  Greenhouse [{slug}] error: {e}")
     return jobs
 
 
-# ── LinkedIn scraper (Playwright) ─────────────────────────────────────────────
+def scrape_lever(slug: str, company_name: str) -> list:
+    """Lever public posting API — no auth needed."""
+    jobs = []
+    try:
+        url = f"https://api.lever.co/v0/postings/{slug}?mode=json&limit=50"
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        for j in data:
+            title = j.get("text", "")
+            if not is_relevant(title):
+                continue
+            desc = " ".join(
+                snippet.get("content", "")
+                for snippet in j.get("descriptionBody", {}).get("descriptionPlain", [])
+                if isinstance(snippet, dict)
+            )
+            jobs.append({
+                "title": title,
+                "company": company_name,
+                "url": j.get("hostedUrl", ""),
+                "description": desc[:2000],
+                "source": "Lever",
+            })
+    except Exception as e:
+        print(f"  Lever [{slug}] error: {e}")
+    return jobs
+
 
 def scrape_linkedin(playwright, query: str) -> list:
     jobs = []
@@ -146,26 +299,28 @@ def scrape_linkedin(playwright, query: str) -> list:
         page = browser.new_page()
         url = (
             f"https://www.linkedin.com/jobs/search/"
-            f"?keywords={requests.utils.quote(query)}&location=United%20States"
-            f"&f_TPR=r86400&sortBy=DD"
+            f"?keywords={requests.utils.quote(query)}"
+            f"&location=United%20States&f_TPR=r86400&sortBy=DD"
         )
         page.goto(url, timeout=20000)
         page.wait_for_timeout(3000)
-        cards = page.query_selector_all("div.base-card")[:8]
+        cards = page.query_selector_all("div.base-card")[:10]
         for card in cards:
             try:
-                title = card.query_selector("h3.base-search-card__title")
-                company = card.query_selector("h4.base-search-card__subtitle")
-                link = card.query_selector("a.base-card__full-link")
-                if not title or not company:
+                title_el = card.query_selector("h3.base-search-card__title")
+                company_el = card.query_selector("h4.base-search-card__subtitle")
+                link_el = card.query_selector("a.base-card__full-link")
+                if not title_el or not company_el:
+                    continue
+                title = title_el.inner_text().strip()
+                if not is_relevant(title):
                     continue
                 jobs.append({
-                    "title": title.inner_text().strip(),
-                    "company": company.inner_text().strip(),
-                    "url": link.get_attribute("href") if link else "",
+                    "title": title,
+                    "company": company_el.inner_text().strip(),
+                    "url": link_el.get_attribute("href") if link_el else "",
                     "description": "",
                     "source": "LinkedIn",
-                    "query": query,
                 })
             except Exception:
                 continue
@@ -175,45 +330,7 @@ def scrape_linkedin(playwright, query: str) -> list:
     return jobs
 
 
-# ── Handshake scraper (requests) ──────────────────────────────────────────────
-
-def scrape_handshake(query: str) -> list:
-    """Handshake public job search (no login required for basic listings)."""
-    jobs = []
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-    }
-    try:
-        url = (
-            f"https://app.joinhandshake.com/jobs?"
-            f"query={requests.utils.quote(query)}&page=1&per_page=10"
-        )
-        resp = requests.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        # Handshake renders SSR listing cards
-        cards = soup.select("li[data-hook='jobs-list-item']")[:10]
-        for card in cards:
-            title_el = card.select_one("[data-hook='job-title']")
-            company_el = card.select_one("[data-hook='employer-name']")
-            link_el = card.select_one("a")
-            if not title_el or not company_el:
-                continue
-            href = link_el["href"] if link_el else ""
-            jobs.append({
-                "title": title_el.get_text(strip=True),
-                "company": company_el.get_text(strip=True),
-                "url": href if href.startswith("http") else "https://app.joinhandshake.com" + href,
-                "description": "",
-                "source": "Handshake",
-                "query": query,
-            })
-    except Exception as e:
-        print(f"  Handshake error: {e}")
-    return jobs
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
     print(f"\n🚀 Job Hunter starting — {datetime.now().strftime('%Y-%m-%d %H:%M')}")
@@ -227,48 +344,61 @@ def main():
     seen_ids = {j["id"] for j in existing.get("jobs", [])}
     new_jobs = []
 
+    def process_listings(listings: list):
+        for listing in listings:
+            jid = job_id(listing["title"], listing["company"], listing["url"])
+            if jid in seen_ids:
+                continue
+            seen_ids.add(jid)
+            print(f"  📋 {listing['title']} @ {listing['company']} [{listing['source']}]")
+            scored = score_job(client, listing["title"], listing["company"], listing.get("description", ""))
+            new_jobs.append({
+                "id": jid,
+                "title": listing["title"],
+                "company": listing["company"],
+                "url": listing["url"],
+                "source": listing["source"],
+                "score": scored.get("score", 50),
+                "match_reasons": scored.get("match_reasons", []),
+                "gaps": scored.get("gaps", []),
+                "seniority": scored.get("seniority", "unknown"),
+                "remote": scored.get("remote"),
+                "scraped_at": datetime.now(timezone.utc).isoformat(),
+                "applied": False,
+                "saved": False,
+            })
+            time.sleep(0.4)
+
+    # 1. Greenhouse companies
+    print(f"\n🏢 Scraping {len(GREENHOUSE_COMPANIES)} companies via Greenhouse API...")
+    for slug, name in GREENHOUSE_COMPANIES:
+        listings = scrape_greenhouse(slug, name)
+        if listings:
+            print(f"  ✓ {name}: {len(listings)} relevant jobs")
+            process_listings(listings)
+        time.sleep(0.3)
+
+    # 2. Lever companies
+    print(f"\n🏢 Scraping {len(LEVER_COMPANIES)} companies via Lever API...")
+    for slug, name in LEVER_COMPANIES:
+        listings = scrape_lever(slug, name)
+        if listings:
+            print(f"  ✓ {name}: {len(listings)} relevant jobs")
+            process_listings(listings)
+        time.sleep(0.3)
+
+    # 3. LinkedIn
+    print(f"\n🔗 Scraping LinkedIn...")
     with sync_playwright() as playwright:
-        for query in SEARCH_QUERIES:
-            print(f"\n🔍 Searching: {query}")
+        for query in LINKEDIN_QUERIES:
+            print(f"  Searching: {query}")
+            listings = scrape_linkedin(playwright, query)
+            process_listings(listings)
+            time.sleep(2)
 
-            raw_listings = []
-            raw_listings += scrape_indeed(query)
-            raw_listings += scrape_linkedin(playwright, query)
-            raw_listings += scrape_handshake(query)
-
-            for listing in raw_listings:
-                jid = job_id(listing["title"], listing["company"], listing["url"])
-                if jid in seen_ids:
-                    print(f"  ↩ skip (dupe): {listing['title']} @ {listing['company']}")
-                    continue
-                seen_ids.add(jid)
-
-                print(f"  📋 Scoring: {listing['title']} @ {listing['company']} [{listing['source']}]")
-                scored = score_job(client, listing["title"], listing["company"], listing["description"])
-
-                job_entry = {
-                    "id": jid,
-                    "title": listing["title"],
-                    "company": listing["company"],
-                    "url": listing["url"],
-                    "source": listing["source"],
-                    "score": scored.get("score", 50),
-                    "match_reasons": scored.get("match_reasons", []),
-                    "gaps": scored.get("gaps", []),
-                    "seniority": scored.get("seniority", "unknown"),
-                    "remote": scored.get("remote"),
-                    "scraped_at": datetime.now(timezone.utc).isoformat(),
-                    "applied": False,
-                    "saved": False,
-                }
-                new_jobs.append(job_entry)
-                time.sleep(0.5)  # rate limit Claude API
-
-            time.sleep(2)  # be polite between queries
-
-    # Merge: new jobs first, then existing, keep last 500
+    # Merge and save
     all_jobs = new_jobs + existing.get("jobs", [])
-    all_jobs = all_jobs[:500]
+    all_jobs = all_jobs[:1000]
 
     result = {
         "jobs": all_jobs,
@@ -276,7 +406,7 @@ def main():
         "meta": {
             "total": len(all_jobs),
             "new_today": len(new_jobs),
-            "sources": ["LinkedIn", "Indeed", "Handshake"],
+            "sources": ["Greenhouse", "Lever", "LinkedIn"],
         },
     }
     save(result)

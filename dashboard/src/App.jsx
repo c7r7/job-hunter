@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 
-const JOBS_URL = "./data/jobs.json";
+const JOBS_URL = "/job-hunter/data/jobs.json";
 
 const SOURCE_COLORS = {
   LinkedIn: { bg: "#E8F0FE", text: "#1a56db", dot: "#1a56db" },
